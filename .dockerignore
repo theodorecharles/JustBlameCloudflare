@@ -3,6 +3,13 @@
 !Dockerfile
 !.dockerignore
 !package.json
+!package-lock.json
+!geoip.js
+!data/
+!data/locations.json
+!data/geoip-source.json
+!scripts/
+!scripts/download-geoip.mjs
 !server.js
 !start.js
 !LICENSE

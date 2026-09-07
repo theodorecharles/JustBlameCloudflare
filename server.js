@@ -1,8 +1,8 @@
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
-import { isIP } from 'node:net';
 import { pathToFileURL } from 'node:url';
+import { clientIPFor, loadGeoLocator } from './geoip.js';
 
 const template = readFileSync(new URL('./templates/error.html', import.meta.url), 'utf8');
 const locations = JSON.parse(readFileSync(new URL('./public/locations.json', import.meta.url), 'utf8'));
@@ -32,38 +32,26 @@ function hostnameFor(request) {
   }
 }
 
-export function renderPage(request, { fallbackColo = '', trustProxy = false } = {}) {
+export function renderPage(request, { locate = loadGeoLocator(), fallbackColo = '', trustProxy = false } = {}) {
   const hostname = hostnameFor(request);
   const ray = /^([a-f\d]{16,32})-([A-Z]{3})$/i.exec(request.headers['cf-ray'] || '');
-  const colo = ray ? ray[2].toUpperCase() : fallbackColo;
-  const forwardedIP = trustProxy ? request.headers['x-real-ip'] : undefined;
-  const clientIP = [request.headers['cf-connecting-ip'], forwardedIP, request.socket.remoteAddress]
-    .find(value => typeof value === 'string' && isIP(value)) || 'Unavailable';
+  const clientIP = clientIPFor(request, trustProxy);
+  const location = locate(clientIP);
+  const colo = location?.code || fallbackColo;
   const values = {
     HOSTNAME: hostname,
     ENCODED_HOSTNAME: encodeURIComponent(hostname),
     TIMESTAMP: new Date().toISOString().slice(0, 19).replace('T', ' ') + ' UTC',
-    COLO: ray ? colo : '',
-    LOCATION: locations[colo] || colo || 'Detecting…',
+    COLO: colo,
+    LOCATION: location?.city || locations[fallbackColo] || 'Cloudflare network',
     RAY_ID: ray ? ray[1].toLowerCase() : randomBytes(8).toString('hex'),
-    CLIENT_IP: clientIP.replace(/^::ffff:/, ''),
+    CLIENT_IP: clientIP || 'Unavailable',
   };
   return template.replace(/\{\{([A-Z_]+)\}\}/g, (_, key) => escapeHtml(values[key] ?? ''));
 }
 
-export async function detectServerColo() {
-  try {
-    const response = await fetch('https://www.cloudflare.com/cdn-cgi/trace', {
-      signal: AbortSignal.timeout(3000),
-    });
-    if (!response.ok) return '';
-    return /^colo=([A-Z]{3})$/m.exec(await response.text())?.[1] || '';
-  } catch {
-    return '';
-  }
-}
-
 export function createOutageServer(options = {}) {
+  options = { ...options, locate: options.locate || loadGeoLocator() };
   return createServer({ requestTimeout: 15_000, headersTimeout: 10_000 }, (request, response) => {
     // Match paths against a fixed asset allowlist; arbitrary paths always get the outage page.
     const pathname = (request.url || '/').split('?')[0];
@@ -104,12 +92,12 @@ export function startServer() {
   const port = Number(process.env.PORT || 8080);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be 1–65535');
   const host = process.env.HOST || '0.0.0.0';
-  const options = { fallbackColo: '', trustProxy: process.env.TRUST_PROXY === 'true' };
+  const fallbackColo = (process.env.FALLBACK_COLO || '').trim().toUpperCase();
+  if (fallbackColo && !locations[fallbackColo]) throw new Error('FALLBACK_COLO must be a known three-letter data-center code');
+  const options = { fallbackColo, trustProxy: process.env.TRUST_PROXY === 'true' };
   const server = createOutageServer(options);
   server.on('error', error => { console.error(error.message); process.exitCode = 1; });
   server.listen(port, host, () => console.log(`Outage server listening on http://${host}:${port}`));
-  // Never delay startup or page rendering on an external service.
-  detectServerColo().then(colo => { options.fallbackColo = colo; });
   for (const signal of ['SIGINT', 'SIGTERM']) {
     process.once(signal, () => {
       server.close(() => process.exit(0));

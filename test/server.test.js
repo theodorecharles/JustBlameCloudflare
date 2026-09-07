@@ -2,12 +2,20 @@ import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { request } from 'node:http';
-import { createOutageServer } from '../server.js';
+import { createOutageServer, renderPage } from '../server.js';
+import { createGeoLocator } from '../geoip.js';
+
+const coordinates = {
+  '9.9.9.9': { latitude: 39.0438, longitude: -77.4874 },
+  '8.8.8.8': { latitude: 51.5074, longitude: -0.1278 },
+  '1.1.1.1': { latitude: 35.6762, longitude: 139.6503 },
+};
+const locate = createGeoLocator({ get: ip => ({ location: coordinates[ip] }) });
 
 let server;
 let origin;
 before(async () => {
-  server = createOutageServer({ trustProxy: true });
+  server = createOutageServer({ trustProxy: true, locate });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   origin = `http://127.0.0.1:${server.address().port}`;
@@ -45,27 +53,32 @@ test('all site routes and methods return the error page with HTTP 500 and no cac
   }
 });
 
-test('hostname and Cloudflare metadata are resolved independently for each request', async () => {
-  for (const [hostname, colo, city] of [
-    ['games-dev.tedcharles.net', 'IAD', 'Ashburn'],
-    ['foodiebeauty.site', 'LHR', 'London'],
-    ['any-other.example', 'NRT', 'Tokyo'],
+test('hostname and offline GeoIP are resolved independently with no Cloudflare headers', async () => {
+  for (const [hostname, ip, city] of [
+    ['games-dev.tedcharles.net', '9.9.9.9', 'Ashburn'],
+    ['foodiebeauty.site', '8.8.8.8', 'London'],
+    ['any-other.example', '1.1.1.1', 'Tokyo'],
   ]) {
     const response = await rawRequest('/', {
-      host: hostname, 'cf-ray': `0123456789abcdef-${colo}`, 'cf-connecting-ip': '203.0.113.5',
+      host: hostname, 'x-real-ip': ip,
     });
     const html = response.body;
     assert.ok(html.includes(`<title>${hostname} |`));
     assert.ok(html.includes(`id="cf-location">${city}</span>`));
-    assert.ok(html.includes(`data-colo="${colo}"`));
-    assert.match(html, /font-semibold">0123456789abcdef/);
-    assert.match(html, /id="cf-footer-ip">203\.0\.113\.5/);
+    assert.ok(html.includes(`id="cf-footer-ip">${ip}`));
+    assert.match(html, /href="https:\/\/db-ip.com"/);
   }
 });
 
-test('unknown data centers display their code and malformed metadata is ignored', async () => {
+test('CF-Ray is decorative only and cannot determine the GeoIP location', async () => {
+  const response = await rawRequest('/', { 'x-real-ip': '8.8.8.8', 'cf-ray': '0123456789abcdef-IAD' });
+  assert.match(response.body, /id="cf-location">London/);
+  assert.match(response.body, /font-semibold">0123456789abcdef/);
   const unknown = await (await fetch(origin, { headers: { 'cf-ray': '0123456789abcdef-ZZZ' } })).text();
-  assert.match(unknown, /id="cf-location">ZZZ/);
+  assert.match(unknown, /id="cf-location">Cloudflare network/);
+});
+
+test('malformed metadata is ignored and cannot leak between requests', async () => {
   const unsafe = (await rawRequest('/', {
     host: '<script>.example', 'cf-ray': '<img src=x onerror=alert(1)>',
     'cf-connecting-ip': '<svg onload=alert(1)>', 'x-forwarded-host': 'evil.example',
@@ -74,6 +87,15 @@ test('unknown data centers display their code and malformed metadata is ignored'
   assert.match(unsafe, /data-colo=""/);
   const fresh = await (await fetch(origin)).text();
   assert.doesNotMatch(fresh, /203\.0\.113\.5|0123456789abcdef/);
+});
+
+test('direct requests use the socket IP; unknown addresses have an optional fallback', () => {
+  const request = { headers: { host: 'direct.example', 'x-real-ip': '8.8.8.8',
+    'cf-connecting-ip': '8.8.8.8' }, socket: { remoteAddress: '9.9.9.9' } };
+  assert.match(renderPage(request, { locate }), /id="cf-location">Ashburn/);
+  request.socket.remoteAddress = '192.168.1.5';
+  assert.match(renderPage(request, { locate }), /id="cf-location">Cloudflare network/);
+  assert.match(renderPage(request, { locate, fallbackColo: 'LHR' }), /id="cf-location">London/);
 });
 
 test('HEAD preserves status and length without sending the page body', async () => {

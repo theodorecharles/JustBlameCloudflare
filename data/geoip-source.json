@@ -1,0 +1,9 @@
+{
+  "provider": "DB-IP IP to City Lite",
+  "release": "2026-09",
+  "url": "https://download.db-ip.com/free/dbip-city-lite-2026-09.mmdb.gz",
+  "archiveSha256": "c5d05b35a45c3eea0cadc728c8f5ad751693d4e270529b731442172a73f05954",
+  "databaseSha1": "6ea870a637b5460023643fc18fdea84dcea14b9c",
+  "license": "https://creativecommons.org/licenses/by/4.0/",
+  "attribution": "https://db-ip.com"
+}

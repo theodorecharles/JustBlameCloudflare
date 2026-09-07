@@ -1,12 +1,16 @@
 {
   "name": "just-blame-cloudflare",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "description": "A small server for a simulated Cloudflare error page.",
   "engines": { "node": ">=22" },
   "scripts": {
     "start": "node start.js",
+    "geoip:download": "node scripts/download-geoip.mjs",
     "test": "node --test"
+  },
+  "dependencies": {
+    "mmdb-lib": "3.0.3"
   }
 }

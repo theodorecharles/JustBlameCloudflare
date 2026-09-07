@@ -8,6 +8,7 @@ const exec = promisify(execFile);
 const docker = async (...args) => (await exec('docker', args, { timeout: 30_000 })).stdout.trim();
 const image = process.argv[2] || 'just-blame-cloudflare:test';
 let container;
+let offlineContainer;
 
 function get(url, headers = {}, method = 'GET') {
   return new Promise((resolve, reject) => {
@@ -26,7 +27,7 @@ function get(url, headers = {}, method = 'GET') {
 try {
   container = await docker('run', '-d', '--read-only', '--cap-drop=ALL',
     '--security-opt=no-new-privileges:true', '--health-interval=1s', '--health-start-period=1s',
-    '-p', '127.0.0.1::8080', image);
+    '-e', 'TRUST_PROXY=true', '-p', '127.0.0.1::8080', image);
   const port = await docker('port', container, '8080/tcp');
   const origin = `http://${port}`;
   let healthy = false;
@@ -39,13 +40,14 @@ try {
   assert.equal(await docker('inspect', '--format', '{{.Config.User}}', container), 'node');
 
   const response = await get(`${origin}/deep/link?test=1`, {
-    Host: 'maintenance.example', 'CF-Ray': '0123456789abcdef-IAD',
+    Host: 'maintenance.example', 'X-Real-IP': '8.8.8.8',
   });
   const html = response.body.toString();
   assert.equal(response.status, 500);
   assert.match(response.headers['cache-control'], /no-store/);
   assert.match(html, /<title>maintenance\.example \|/);
-  assert.match(html, /id="cf-location">Ashburn/);
+  assert.match(html, /id="cf-location">San Jose/);
+  assert.match(html, /IP Geolocation by DB-IP/);
   const cloud = html.split('id="cf-cloudflare-status"')[1].split('id="cf-host-status"')[0];
   assert.match(cloud, /cf-icon-error/);
   assert.match(cloud, /text-red-error">Error/);
@@ -58,10 +60,30 @@ try {
   assert.equal(icon.body.subarray(1, 4).toString(), 'PNG');
   const files = JSON.parse(await docker('exec', container, 'node', '-e',
     'console.log(JSON.stringify(require("node:fs").readdirSync("/app")))'));
-  assert.deepEqual(files.sort(), ['LICENSE', 'THIRD_PARTY.md', 'package.json', 'public', 'server.js', 'start.js', 'templates'].sort());
+  assert.deepEqual(files.sort(), ['LICENSE', 'THIRD_PARTY.md', 'data', 'geoip.js', 'node_modules', 'package.json', 'public', 'server.js', 'start.js', 'templates'].sort());
   await docker('stop', '--time', '6', container);
   assert.equal(await docker('inspect', '--format', '{{.State.ExitCode}}', container), '0');
-  console.log('Container smoke test passed: healthy, non-root, read-only, correct page/assets, clean shutdown.');
+  // A second instance starts with no external network interface at all. Its local
+  // request must still render a location from the bundled IPv6 database.
+  offlineContainer = await docker('run', '-d', '--network=none', '--read-only', '--cap-drop=ALL',
+    '--security-opt=no-new-privileges:true', '-e', 'TRUST_PROXY=true', image);
+  await docker('exec', offlineContainer, 'node', '--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import { setTimeout as delay } from 'node:timers/promises';
+    let response;
+    for (let i = 0; i < 40; i++) {
+      try {
+        response = await fetch('http://127.0.0.1:8080/', { headers: { 'X-Real-IP': '2001:4860:4860::8888' } });
+        break;
+      } catch { await delay(100); }
+    }
+    assert.equal(response?.status, 500);
+    assert.ok((await response.text()).includes('id="cf-location">Montréal'));
+  `);
+  await docker('stop', '--time', '6', offlineContainer);
+  assert.equal(await docker('inspect', '--format', '{{.State.ExitCode}}', offlineContainer), '0');
+  console.log('Container smoke test passed: offline IPv4/IPv6 GeoIP, healthy, non-root, read-only, correct page/assets, clean shutdown.');
 } finally {
   if (container) await docker('rm', '-f', container);
+  if (offlineContainer) await docker('rm', '-f', offlineContainer);
 }
