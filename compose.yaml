@@ -1,0 +1,13 @@
+services:
+  just-blame-cloudflare:
+    image: ghcr.io/theodorecharles/just-blame-cloudflare:latest
+    ports:
+      - "18080:8080"
+    environment:
+      TRUST_PROXY: "false"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped

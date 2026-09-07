@@ -1,0 +1,13 @@
+# Only runtime files enter the build context. In particular, never send .deployment/.
+**
+!Dockerfile
+!.dockerignore
+!package.json
+!server.js
+!start.js
+!LICENSE
+!THIRD_PARTY.md
+!public/
+!public/**
+!templates/
+!templates/error.html
