@@ -100,7 +100,7 @@ export function createOutageServer(options = {}) {
   });
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+export function startServer() {
   const port = Number(process.env.PORT || 8080);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be 1–65535');
   const host = process.env.HOST || '0.0.0.0';
@@ -117,3 +117,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     });
   }
 }
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) startServer();

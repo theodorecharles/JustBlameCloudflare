@@ -2,7 +2,7 @@ module.exports = {
   apps: [{
     name: 'just-blame-cloudflare',
     cwd: __dirname,
-    script: './server.js',
+    script: './start.js',
     instances: 1,
     exec_mode: 'fork',
     autorestart: true,
