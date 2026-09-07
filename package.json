@@ -1,0 +1,12 @@
+{
+  "name": "just-blame-cloudflare",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A small server for a simulated Cloudflare error page.",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  }
+}
